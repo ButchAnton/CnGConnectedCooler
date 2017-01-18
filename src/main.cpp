@@ -35,8 +35,15 @@ Distributed as-is; no warranty is given.
  * I2C address is 0x76 (not 0x77, which is the default)
  */
 
+#define DEBUG_REST
+#define DEBUG_ESP_SSL
 
+#include <Arduino.h>
 #include <stdint.h>
+
+// JSON generator
+
+#include <ArduinoJson.h>
 
 // BM[E,P]280
 
@@ -50,6 +57,27 @@ Distributed as-is; no warranty is given.
 #include "quaternionFilters.h"
 #include "MPU9250.h"
 
+// WI-FI/WifiManager/REST
+
+#include <ESP8266WiFi.h>
+#include <DNSServer.h>
+#include <ESP8266WebServer.h>
+#include <WiFiManager.h>
+#include <RestClient.h>
+
+typedef Palatis::RestClient<WiFiClientSecure, 443> RestClient_T;
+
+const char* ssid     = "TP-LINK_4379";
+const char* password = "TP-LINK_4379";
+
+const char* host = "things.ubidots.com";
+const char *uri = "/api/v1.6/devices/cngconnectedcooler";
+#define UBIDOTS_TOKEN "UL7wpuTgnlsn04DwPFmytrr3cX5kDq"
+
+// Use WiFiClientSecure class to create TCP connections
+
+WiFiClientSecure client;
+RestClient_T rest = RestClient_T(client, host);
 
 // Global BM[E,P]280 object
 
@@ -66,8 +94,108 @@ float xAxisRestValue = 0.0;
 #define Y_AXIS_MAG_BIAS (+120.0)
 #define Z_AXIS_MAG_BIAS (+125.0)
 
+// Global cooler variables
+
+enum DOORSTATE {
+  doorOpen = 0,
+  doorClosed = 1
+} oldDoorState = doorClosed;
+
+long doorOpenCount = 0;
+long doorCloseCount = 0;
+
+/*
+ * Here is the JSON data format:
+ *
+ *
+
+   {
+     "deviceId": "COOLER_7",
+     "messageTimeStamp": "1467370000000",
+     "firmwareVersion": "ZVER1",
+     "temperature": 12,
+     "doorOpenCount": 11,
+     "doorCloseCount": 11,
+     "doorOpenTime": 33,
+     "mobileNetworkId": "ZNTW1",
+     "mobileCellularId": "ZCELL1",
+     "latitude": 37.400794,
+     "longitude": -122.109797,
+     "mobileCellularType": "3G",
+     "mobileRSSI": -70,
+     "powerState": 0,
+     "coolerState": 3,
+     "wifiVisibleCount": 2
+   }
+
+*
+* For an explanation, see https://github.wdf.sap.corp/IoT-SCB-India/Connected-X-Wiki/blob/master/restservices/devicedata.md
+*
+*
+*/
+
+// doorState (0 = OPEN, 1 = CLOSED)
+// We assume that the door is closed on boot.
+
+void postToCnG(float temperature, enum DOORSTATE currentDoorState) {
+
+  // Create the body of the POST in JSON format.
+
+  DynamicJsonBuffer jsonBuffer;
+
+  JsonObject& root = jsonBuffer.createObject();
+
+  root["temperature"] = temperature;
+
+#if 0
+  if (currentDoorState != oldDoorState) {
+    if (currentDoorState == doorOpen) {
+      doorOpenCount++;
+      root["doorOpenCount"] = doorOpenCount;
+    } else {
+      doorCloseCount++;
+      root["doorCloseCount"] = doorCloseCount;
+    }
+  }
+#endif // 0
+
+  int bufferLength = root.measureLength() + 1;
+
+  char *body = (char *)malloc(bufferLength * sizeof(char));
+
+  root.printTo(body, bufferLength);
+
+  Serial.print("postToCnG: POSTing body: "); Serial.println(body);
+  Serial.print("postToCnG: POSTing to: "); Serial.print("https://"); Serial.print(host); Serial.println(uri);
+  Serial.println();
+
+  rest.addHeader("X-Auth-Token", UBIDOTS_TOKEN);
+  rest.setContentType("application/json");
+
+  String response = rest.post(uri, body);
+
+  Serial.print("postToCnG: POST returned "); Serial.println(response);
+  Serial.println();
+
+  free(body);
+}
+
 void setup()
 {
+
+  Serial.begin(115200);
+  delay(5000);
+
+  WiFiManager wifiManager;
+  wifiManager.autoConnect(ssid, password);
+
+  Serial.println();
+  Serial.println("WiFi connected");
+  Serial.print("IP address: "); Serial.println(WiFi.localIP());
+
+  postToCnG(79.99, doorOpen);
+
+  delay(10000000);
 
 	// Setup for BM[E,P]280
 
